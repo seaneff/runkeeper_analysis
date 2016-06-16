@@ -43,6 +43,7 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 
 workout <- read.csv("runkeeper-data-export-41471231-2016-06-12-2322/cardioActivities.csv")
 workout$Notes <- as.character(workout$Notes)
+workout$notes <- as.POSIXct(workout$Date)
 ## time range is set manually in export, specify which one was used here
 time_range <- "1/1/2016 - 6/12/2016"
 
@@ -50,6 +51,8 @@ time_range <- "1/1/2016 - 6/12/2016"
 run <- workout[which(workout$Type == "Running"),]
 ## reformat pace as time
 run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
+
+run$time_of_day <- as.POSIXct(run$Average.Pace, format = "%:H:%M:%S")
 
 #####################################################################
 ## How long are my runs? ############################################

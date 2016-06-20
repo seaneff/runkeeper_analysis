@@ -41,17 +41,20 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 ## load and format runkeeper data ###################################
 #####################################################################
 
-workout <- read.csv("data/runkeeper-data-export-41471231-2016-06-12-2322/cardioActivities.csv")
+workout <- read.csv("data/runkeeper-data-export-41471231-2016-06-20-0021/cardioActivities.csv")
+
+## format selected variables
 workout$Notes <- as.character(workout$Notes)
 workout$notes <- as.POSIXct(workout$Date)
+
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2016 - 6/12/2016"
+time_range <- "1/1/2016 - 6/19/2016"
 
 ## just look at runs (workout type = "running")
 run <- workout[which(workout$Type == "Running"),]
-## reformat pace as time
-run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
 
+## reformat pace and time of day as time
+run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
 run$time_of_day <- as.POSIXct(run$Average.Pace, format = "%:H:%M:%S")
 
 #####################################################################
@@ -109,11 +112,13 @@ pace_by_time <- lm(run$Average.Speed..mph. ~ run$Distance..mi)
 ## process free text ###########################
 ################################################
 
+## format data as corpus
 run_text <- Corpus(VectorSource(run$Notes))
-## remote SMART stopwords: http://jmlr.csail.mit.edu/papers/volume5/lewis04a/a11-smart-stop-list/english.stop
 
+## remove SMART stopwords: http://jmlr.csail.mit.edu/papers/volume5/lewis04a/a11-smart-stop-list/english.stop
 run_text_processed <- tm_map(run_text, removeWords, stopwords("SMART"))
 
+## remove punctuation
 run_text_processed <- tm_map(run_text_processed, removePunctuation)
 
 ## generate document term matrix from processed text data
@@ -138,33 +143,52 @@ dev.off()
 ## distance-related word cloud #################
 ################################################
 
+## median distance of all runs
 median_distance <- median(run$Distance..mi.)
+
+## for each run, identify whether run distance is above or below median distance
 run$long_binary <- ifelse(run$Distance..mi. > median_distance, "longer", "shorter")
 
-## for each document, identify if a each word is ever used
-long_counts <- as.vector(rollup(dt[which(run$long_binary == "longer"),], 1, FUN = function(x)sum(ifelse(x > 0, 1, 0))))
-short_counts <- as.vector(rollup(dt[which(run$long_binary == "shorter"),], 1, FUN = function(x)sum(ifelse(x > 0, 1, 0))))
+## count the number of times each word is used in long runs and in sort runs
+## note that a word will only be counted once per post/note, even if it's used twice in that post/note
+long_counts <- as.vector(rollup(dt[which(run$long_binary == "longer"),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+short_counts <- as.vector(rollup(dt[which(run$long_binary == "shorter"),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+
+## reformat names to keep track of words associated with each count
 names(long_counts) <- colnames(dt); names(short_counts) <- colnames(dt)
 
+## create a dataframe with one row per word in the corpus
+## and one column that counts the number of posts for long runs that used that word,
+## and one column that counts the number of posts for short runs that used that word
 length_level <- cbind.data.frame(long = long_counts, short = short_counts)
+
+## count the total number of posts in which a word was used (in both long and short runs)
 length_level$total_count <- apply(length_level, 1, sum)
+
+## calculate probability that each word shows up in a note for a long run and a short run
 length_level$p_long <- length_level$long / sum(run$long_binary == "longer")
 length_level$p_short <- length_level$short / sum(run$long_binary == "shorter")
+
+## calculate relative risk and log relative risk
 ## add 0.001 to avoid dividing by zero or taking the log of 0
 length_level$rr <- (length_level$p_long + 0.001) / (length_level$p_short + 0.001)
 length_level$log_rr <- log((length_level$p_long + 0.001) / (length_level$p_short + 0.001)) 
 
+## calculate x axis position:
 ## add a bit of a jitter (add random noise along the x axis to avoid overlapping words)
 plotting_randomness_factor <- 1.5
 set.seed(1202)
 length_level$x <- length_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor, n = nrow(length_level))
+
+## calculate y axis position:
+## randomly
 set.seed(0311)
 length_level$y <- runif(min = 1, max = 10, n = nrow(length_level))
 
-plotting_limit <- 1.1*max(c(abs(min(length_level$x)),
-                    abs(max(length_level$x)))) 
+## specify x plotting limits
+plotting_limit <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 
 
-
+## generate figure
 pdf("results/positioned_wordcloud_distance.pdf", height = 5, width = 9)
 ggplot(length_level, aes(x = x , y = y)) + 
   geom_text(aes(size = total_count,
@@ -191,44 +215,63 @@ dev.off()
 ## use the residuals of the very simple fitted model (fit above) of pace ~ distance
 ## to see if a run is faster than expected for its distance or slower than expected
 ## for its distance
-slow_counts <- as.vector(rollup(dt[which(pace_by_time$resid < 0),], 1, FUN = function(x)sum(ifelse(x > 0, 1, 0))))
-fast_counts <- as.vector(rollup(dt[which(pace_by_time$resid >= 0),], 1, FUN = function(x)sum(ifelse(x > 0, 1, 0))))
+## then count the number of times each word is used in fast runs and in slow runs (adjusted for distance)
+## note that a word will only be counted once per post/note, even if it's used twice in that post/note
+slow_counts <- as.vector(rollup(dt[which(pace_by_time$resid < 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+fast_counts <- as.vector(rollup(dt[which(pace_by_time$resid >= 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+
+## reformat names to keep track of words associated with each count
 names(slow_counts) <- colnames(dt); names(fast_counts) <- colnames(dt)
 
+## create a dataframe with one row per word in the corpus
+## and one column that counts the number of posts for rast runs that used that word,
+## and one column that counts the number of posts for slow runs that used that word
 pace_level <- cbind.data.frame(fast = fast_counts, slow = slow_counts)
 
+## count the total number of posts in which a word was used (in both long and short runs)
 pace_level$total_count <- apply(pace_level, 1, sum)
+
+## calculate probability that each word shows up in a note for a long run and a short run
 pace_level$p_fast <- pace_level$fast / sum(pace_by_time$resid >= 0)
 pace_level$p_slow <- pace_level$slow / sum(pace_by_time$resid < 0)
+
+## calculate relative risk and log relative risk
 ## add 0.001 to avoid dividing by zero or taking the log of 0
 pace_level$rr <- (pace_level$p_fast + 0.001) / (pace_level$p_slow + 0.001)
 pace_level$log_rr <- log((pace_level$p_fast + 0.001) / (pace_level$p_slow + 0.001)) 
 
+## calculate x axis position based on length-based relative risk:
 ## add a bit of a jitter (add random noise along the x axis to avoid overlapping words)
-plotting_randomness_factor <- 1.5
+plotting_randomness_factor_x <- 1.5
 set.seed(1202)
-length_level$x <- length_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor, n = nrow(length_level))
+length_level$x <- length_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor_x, n = nrow(length_level))
+
+## calculate y axis position based on pace-based relative risk:
+## add a bit of a jitter (add random noise along the y axis to avoid overlapping words)
+plotting_randomness_factor_y <- 1.5
 set.seed(0311)
-length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor, n = nrow(pace_level))
+length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor_y, n = nrow(pace_level))
 
-length_level$alpha <- (length_level$total_count - min(length_level$total_count))/
-                       max(length_level$total_count)
+## calculate alpha based on the total number of times a word was used
+## originally used minmax, but then decided to adjust to the log scale to make differences slightly less pronounced
+## make sure every word has an alpha of at least 0.2 (see adjustment below)
+## since for now, I want every word to be plotted
+length_level$alpha <-  (log(length_level$total_count) - min(log(length_level$total_count)))/
+                          max(log(length_level$total_count))
+length_level$alpha_updated <- ifelse(length_level$alpha > 0.2, length_level$alpha, 0.2)
 
-length_level$alpha[which(length_level$alpha == 0)] <- 0.01
+## specify x plotting limits
+plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 
 
-plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)),
-                            abs(max(length_level$x)))) 
+## specify y plotting limits
+plotting_limit_y <- 1.1*max(c(abs(min(length_level$y)), abs(length_level$y))) 
 
-plotting_limit_y <- 1.1*max(c(abs(min(length_level$y)),
-                              abs(length_level$y))) 
-
-
+## generate figure
 pdf("results/positioned_wordcloud_distance_pace.pdf", height = 5, width = 9)
-ggplot(length_level, aes(x = x , y = y)) + 
+ggplot(length_level, aes(x = x , y = y, alpha = alpha_updated)) + 
   geom_text(aes(size = total_count,
                 label = row.names(length_level),
-                colour = log_rr),
-            alpha = 0.6) + 
+                colour = log_rr)) + 
   scale_size(range = c(3, 5), name = "Number of Runs\nwith Notes\nMentioning Word") +
   scale_color_gradient(low = "#8E0045", high = "#0A4877", guide = "none") +  
   scale_x_continuous(breaks = c(-1*plotting_limit_x, 0, plotting_limit_x),
@@ -241,7 +284,8 @@ ggplot(length_level, aes(x = x , y = y)) +
                      labels = c("Said More after\nSlower Runs of Similar Distances",
                                 "Said Equally after\nFaster and Slower Runs",
                                 "Said More after\nFaster Runs of Similar Distances")) +
-  ggtitle("Relaxing vs. Strugglefest:\nWord use After Shorter vs. Longer Runkeeper Runs") +
+  guides(alpha = FALSE) +
+  ggtitle("Relaxing vs. Strugglefest:\nWord use After Different Distances and Paces of Runs") +
   xlab("") +
   ylab("") +
   theme_bw()

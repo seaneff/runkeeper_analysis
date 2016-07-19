@@ -3,6 +3,7 @@
 #####################################################################
 
 setwd("~/Documents/workspace/runkeeper_analysis")
+library(ranger)
 library(tm)
 library(slam)
 library(ggplot2)
@@ -25,7 +26,7 @@ mar_default <- par()$mar
 
 # write a simple function to add footnote
 makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
-                         size = 1, color = "black")
+                         cex = 1, color = "black")
 {
   require(grid)
   pushViewport(viewport())
@@ -33,7 +34,7 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
             x = unit(1,"npc") - unit(2, "mm"),
             y = unit(2, "mm"),
             just = c("right", "bottom"),
-            gp = gpar(cex = size, col = color))
+            gp = gpar(cex = cex, col = color))
   popViewport()
 }
 
@@ -55,13 +56,15 @@ run <- workout[which(workout$Type == "Running"),]
 
 ## reformat pace and time of day as time
 run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
-run$time_of_day <- as.POSIXct(run$Average.Pace, format = "%:H:%M:%S")
+run$time_of_day <- format(as.POSIXct(run$Date), "%H:%M:%S")
+run$morning_afternoon <- factor(ifelse(run$time_of_day < "12:00:00", "morning", "afternoon/evening"),
+                                levels = c("morning", "afternoon/evening"))
 
 #####################################################################
-## How long are my runs? ############################################
+## Distribution of run length #######################################
 #####################################################################
 
-pdf("results/run_length.pdf", height = 5, width = 6)
+pdf("results/run_length.pdf", height = 4, width = 5)
 par(mar = mar_default + c(2, 0, 0, 0))
 hist(run$Distance..mi,
      ylab = "Number of Runs",
@@ -78,11 +81,25 @@ legend("topright",
                         round(quantile(run$Distance..mi, .75), 1), "] miles",
                         sep = "")),
        bg = "gray90")
-makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range))
+makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range),
+             cex = 0.6)
 dev.off()
 
 #####################################################################
-## Does my running speed differ by run length? ######################
+## Distribution of run length by time of day ########################
+#####################################################################
+
+pdf("results/run_length_by_time_of_day.pdf", height = 4, width = 4)
+ggplot(run, aes(Distance..mi.)) + 
+  ggtitle("Distribution of Run Length by Time of Day") +
+  geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
+  xlab("Distance (in miles)") +
+  ylab("Number of Runs") +
+  facet_wrap(~ morning_afternoon, nrow = 2)
+dev.off()
+                     
+#####################################################################
+## Pace vs. Distance ################################################
 #####################################################################
 
 pdf("results/pace_vs_distance.pdf", height = 4, width = 6)
@@ -92,21 +109,48 @@ plot(run$Distance..mi, run$avg_pace,
      ylab = "Average Pace per Run\n",
      main = "Pace vs. Distance",
      col = "#3a33a3", las = 1)
-makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range))
+makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range),
+             cex = 0.6)
 dev.off()
 
 #############################################################################
-## basic regression: pace ~ run length  (dont' consider date of run) ########
+## imputation for missing elevation data ####################################
 #############################################################################
 
-## for future plots, this will help to define runs that may be 
-## faster than expected given the distance vs. slower than expected
-## given the distance
+## if climb.ft is not known, use imputation
+impute_climb <- ranger(Climb..ft. ~ Average.Speed..mph. + Distance..mi.,
+                       data = run[which(complete.cases(run$Climb..ft.)),],
+                       write.forest = TRUE,
+                       num.trees = 500, mtry = 1)
 
-pace_by_time <- lm(run$Average.Speed..mph. ~ run$Distance..mi)
+## make predictions for run climb
+impute_climb_predictions <- predict(impute_climb, 
+                                    data = run[-which(complete.cases(run$Climb..ft.)),])
 
-## for runs between 1/1/2016 and 6/12/2016, there is no strong evidence
-## than my face differed based on climb (elevation gain)
+## add indicator to show if climb data were imputed
+run$climb_imputed <- ifelse(is.na(run$Climb..ft.), TRUE, FALSE)
+
+## fill in missing data with imputed precitions
+run[-which(complete.cases(run$Climb..ft.)),]$Climb..ft. <- impute_climb_predictions$predictions
+
+################################################################################
+## predict average pace based on distance, time of day, and elevation/climb ####
+################################################################################
+
+pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + Climb..ft., 
+                          data = run, num.trees = 500,
+                          mtry = 1, importance = "impurity",
+                          write.forest = TRUE)
+
+##############################################################
+## calculate residual for each random forest prediction ######
+##############################################################
+
+## residual = observed - predicted
+## negative residuals = ran slower than expected (prediction > actual)
+## positive residuals = ran faster than expected (prediction < actual)
+
+run$residual <- run$Average.Speed..mph. - predict(pace_by_time_rf, run)$predictions 
 
 ################################################
 ## process free text ###########################
@@ -212,13 +256,17 @@ dev.off()
 ## distance and speed word cloud ###############
 ################################################
 
-## use the residuals of the very simple fitted model (fit above) of pace ~ distance
-## to see if a run is faster than expected for its distance or slower than expected
-## for its distance
+## use the residuals of the random forest (fit above) of pace ~ distance + climb + time of day
+## to see if a run is faster than expected for its distance or slower than expected for its distance, climb, and time of day
 ## then count the number of times each word is used in fast runs and in slow runs (adjusted for distance)
 ## note that a word will only be counted once per post/note, even if it's used twice in that post/note
-slow_counts <- as.vector(rollup(dt[which(pace_by_time$resid < 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
-fast_counts <- as.vector(rollup(dt[which(pace_by_time$resid >= 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+
+## residual = observed - predicted
+## negative residuals = ran slower than expected (prediction > actual)
+## positive residuals = ran faster than expected (prediction < actual)
+
+slow_counts <- as.vector(rollup(dt[which(run$resid <= 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
+fast_counts <- as.vector(rollup(dt[which(run$resid > 0),], 1, FUN = function(x) sum(ifelse(x > 0, 1, 0))))
 
 ## reformat names to keep track of words associated with each count
 names(slow_counts) <- colnames(dt); names(fast_counts) <- colnames(dt)
@@ -232,8 +280,8 @@ pace_level <- cbind.data.frame(fast = fast_counts, slow = slow_counts)
 pace_level$total_count <- apply(pace_level, 1, sum)
 
 ## calculate probability that each word shows up in a note for a long run and a short run
-pace_level$p_fast <- pace_level$fast / sum(pace_by_time$resid >= 0)
-pace_level$p_slow <- pace_level$slow / sum(pace_by_time$resid < 0)
+pace_level$p_fast <- pace_level$fast / sum(run$residual > 0)
+pace_level$p_slow <- pace_level$slow / sum(run$residual <= 0)
 
 ## calculate relative risk and log relative risk
 ## add 0.001 to avoid dividing by zero or taking the log of 0
@@ -258,7 +306,7 @@ length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_f
 ## since for now, I want every word to be plotted
 length_level$alpha <-  (log(length_level$total_count) - min(log(length_level$total_count)))/
                           max(log(length_level$total_count))
-length_level$alpha_updated <- ifelse(length_level$alpha > 0.2, length_level$alpha, 0.2)
+length_level$alpha_updated <- ifelse(length_level$alpha > 0.4, length_level$alpha, 0.4)
 
 ## specify x plotting limits
 plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 

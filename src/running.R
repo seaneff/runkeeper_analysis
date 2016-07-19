@@ -306,7 +306,7 @@ length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_f
 ## since for now, I want every word to be plotted
 length_level$alpha <-  (log(length_level$total_count) - min(log(length_level$total_count)))/
                           max(log(length_level$total_count))
-length_level$alpha_updated <- ifelse(length_level$alpha > 0.4, length_level$alpha, 0.4)
+length_level$alpha_updated <- ifelse(length_level$alpha > 0.2, length_level$alpha, 0.2)
 
 ## specify x plotting limits
 plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 
@@ -319,8 +319,9 @@ pdf("results/positioned_wordcloud_distance_pace.pdf", height = 5, width = 9)
 ggplot(length_level, aes(x = x , y = y, alpha = alpha_updated)) + 
   geom_text(aes(size = total_count,
                 label = row.names(length_level),
-                colour = log_rr)) + 
+                colour = log_rr)) +
   scale_size(range = c(3, 5), name = "Number of Runs\nwith Notes\nMentioning Word") +
+  scale_alpha(range = c(min(length_level$alpha_updated), max(length_level$alpha_updated))) +
   scale_color_gradient(low = "#8E0045", high = "#0A4877", guide = "none") +  
   scale_x_continuous(breaks = c(-1*plotting_limit_x, 0, plotting_limit_x),
                      limits = c(-1.2*plotting_limit_x, 1.2*plotting_limit_x),

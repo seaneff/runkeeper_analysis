@@ -42,14 +42,14 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 ## load and format runkeeper data ###################################
 #####################################################################
 
-workout <- read.csv("data/runkeeper-data-export-41471231-2016-06-20-0021/cardioActivities.csv")
+workout <- read.csv("data/runkeeper-data-export-41471231-2016-07-19-0053/cardioActivities.csv")
 
 ## format selected variables
 workout$Notes <- as.character(workout$Notes)
 workout$notes <- as.POSIXct(workout$Date)
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2016 - 6/19/2016"
+time_range <- "1/1/2016 - 7/18/2016"
 
 ## just look at runs (workout type = "running")
 run <- workout[which(workout$Type == "Running"),]

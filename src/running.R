@@ -186,7 +186,7 @@ map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]),
 
 map_roadmap <- get_map(location = c(clusters[i,2], clusters[i,1]), 
                 maptype = "roadmap", source = "google",
-                zoom = 12)
+                zoom = 12, color = "bw")
 
 ## plot map with tracks (watercolor)
 wc <- ggmap(map_watercolor, extent = "device") +
@@ -207,7 +207,8 @@ r <- ggmap(map_roadmap, extent = "device") +
 
 for( j in unique(full_runs$run_id)) {
   r <- r + geom_path(data = full_runs[which(full_runs$run_id == j),], 
-                     col = "dark blue", size = 1, lineend = "round", alpha = 0.4)
+                     col = "dark blue", size = 1, lineend = "round", alpha = 0.4,
+                     col = "bw")
 }
 
 print(r)

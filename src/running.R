@@ -8,6 +8,9 @@ library(tm)
 library(slam)
 library(ggplot2)
 library(wordcloud)
+library(XML)
+library(plyr)
+library(fpc)
 
 #####################################################################
 ## set plotting parameters ##########################################
@@ -39,26 +42,55 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 }
 
 #####################################################################
-## load and format runkeeper data ###################################
+## load and format runkeeper data (non-gpx) #########################
 #####################################################################
 
-workout <- read.csv("data/runkeeper-data-export-41471231-2016-07-19-0053/cardioActivities.csv")
+workout <- read.csv("data/runkeeper-data-export-41471231-2016-08-08-2358/cardioActivities.csv")
 
 ## format selected variables
 workout$Notes <- as.character(workout$Notes)
 workout$notes <- as.POSIXct(workout$Date)
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2016 - 7/18/2016"
+time_range <- "1/1/2015 - 8/8/2016"
 
 ## just look at runs (workout type = "running")
 run <- workout[which(workout$Type == "Running"),]
+
+## exclude tough mudder
+run <- run[-which(run$Notes == "Tough Mudder in Portland Maine"),]
 
 ## reformat pace and time of day as time
 run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
 run$time_of_day <- format(as.POSIXct(run$Date), "%H:%M:%S")
 run$morning_afternoon <- factor(ifelse(run$time_of_day < "12:00:00", "morning", "afternoon/evening"),
                                 levels = c("morning", "afternoon/evening"))
+
+#####################################################################
+## load and format gpx data #########################################
+#####################################################################
+
+## thanks to Daniel Cook and Holger Brandl for providing code on git
+## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
+## reference: https://gist.github.com/holgerbrandl/5595165
+
+# gpx files in data subdirectory
+gpx_files <- paste("data/runkeeper-data-export-41471231-2016-08-08-2358/",
+                   dir(path = "data/runkeeper-data-export-41471231-2016-08-08-2358", 
+                 pattern = "\\.gpx"), sep = "")
+
+for (i in 1:length(gpx_files)) {
+  curr_route <- xmlParse(gpx_files[i], useInternalNodes = TRUE)
+  route_df <- ldply(xpathSApply(curr_route, "//*[local-name()='trkpt']"), 
+                    function(x) unlist(xmlToList(x)))
+  colnames(route_df) <- c("elevation", "datetime", "lat", "lon")
+  trackdata <- data.frame(datetime=route_df$datetime, 
+                          colwise(as.numeric, .(elevation, lat, lon))(route_df))
+  trackdata$run_id <- i
+  if(i == 1){ full_runs <- trackdata }
+  if(i > 1) {full_runs <- rbind.data.frame(full_runs, trackdata)}
+}
+
 
 #####################################################################
 ## Distribution of run length #######################################
@@ -71,8 +103,8 @@ hist(run$Distance..mi,
      xlab = "Distance (in miles)",
      col = "#3a33a3",
      main = "Overall Run Distance",
-     xlim = c(0, 10),
-     ylim = c(0, length(run$Distance..mi)/2.5))
+     xlim = c(0, 12),
+     ylim = c(0, length(run$Distance..mi)/1.75))
 box()
 legend("topright",
        legend = c(paste("median:", round(median(run$Distance..mi), 1), "miles"),
@@ -111,6 +143,77 @@ plot(run$Distance..mi, run$avg_pace,
      col = "#3a33a3", las = 1)
 makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range),
              cex = 0.6)
+dev.off()
+
+#############################################################################
+## identify clusters of runs based on location ##############################
+#############################################################################
+
+## code based on code originally written by Daniel Cook
+## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
+
+# Identify geospatial clusters of run locations
+# Partitioning around medoids 
+
+num_locations <- 3
+clusters <- pamk(full_runs[,c("lat", "lon")], 
+                 krange = num_locations:20, 
+                 diss = TRUE, usepam = FALSE)$pamobject$medoids
+
+#############################################################################
+## plot runs for each primary location identified by clustering (above) #####
+#############################################################################
+
+## code based on code originally written by Eric C. Anderson for (NOAA/SWFSC) for a Reproducable Research Course
+## http://eriqande.github.io/rep-res-web/
+## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
+## reference: http://eriqande.github.io/rep-res-web/lectures/making-maps-with-R.html
+
+## save pdf
+pdf("results/maps.pdf", height = 5, width = 5)
+
+for(i in 1:nrow(clusters)){
+
+## pull watercolor map from API
+map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]), 
+                           maptype = "watercolor", source = "stamen",
+                           zoom = 12)
+
+## pull watercolor map from API
+map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]), 
+                          maptype = "watercolor", source = "stamen",
+                          zoom = 12)
+
+map_roadmap <- get_map(location = c(clusters[i,2], clusters[i,1]), 
+                maptype = "roadmap", source = "google",
+                zoom = 12)
+
+## plot map with tracks (watercolor)
+wc <- ggmap(map_watercolor, extent = "device") +
+  theme(axis.line = element_line(color = NA)) + 
+  xlab("") + ylab("") 
+
+  for( j in unique(full_runs$run_id)) {
+    wc <- wc + geom_path(data = full_runs[which(full_runs$run_id == j),], 
+                         col = "dark blue", size = 1, lineend = "round", alpha = 0.4)
+  }
+
+print(wc)
+
+## plot map with tracks (watercolor)
+r <- ggmap(map_roadmap, extent = "device") +
+  theme(axis.line = element_line(color = NA)) + 
+  xlab("") + ylab("") 
+
+for( j in unique(full_runs$run_id)) {
+  r <- r + geom_path(data = full_runs[which(full_runs$run_id == j),], 
+                     col = "dark blue", size = 1, lineend = "round", alpha = 0.4)
+}
+
+print(r)
+
+}
+
 dev.off()
 
 #############################################################################
@@ -232,12 +335,22 @@ length_level$y <- runif(min = 1, max = 10, n = nrow(length_level))
 ## specify x plotting limits
 plotting_limit <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 
 
+## calculate alpha based on the total number of times a word was used
+## originally used minmax, but then decided to adjust to the log scale to make differences slightly less pronounced
+## make sure every word has an alpha of at least 0.1 (see adjustment below)
+## since for now, I want every word to be plotted
+
+length_level$alpha <-  (log(length_level$total_count) - min(log(length_level$total_count)))/
+  max(log(length_level$total_count))
+
+length_level$alpha_updated <- ifelse(length_level$alpha > 0.1, length_level$alpha, 0.1)
+
 ## generate figure
 pdf("results/positioned_wordcloud_distance.pdf", height = 5, width = 9)
 ggplot(length_level, aes(x = x , y = y)) + 
   geom_text(aes(size = total_count,
                 label = row.names(length_level),
-                colour = log_rr), alpha = 0.7) +
+                colour = log_rr, alpha = alpha_updated)) +
   scale_size(range = c(3, 5), name = "Number of Runs\nwith Notes\nMentioning Word") +
   scale_color_gradient(low = "#8E0045", high = "#0A4877", guide = "none") +  
   scale_x_continuous(breaks = c(-1*plotting_limit, 0, plotting_limit),
@@ -247,6 +360,7 @@ ggplot(length_level, aes(x = x , y = y)) +
                                 paste("Said More after\nLong Runs\n(runs more than",  round(median_distance, 1), "miles)"))) +
   scale_y_continuous(breaks=NULL) + 
   ggtitle("Relaxing vs. Strugglefest:\nWord use After Shorter vs. Longer Runkeeper Runs") +
+  guides(alpha = FALSE) +
   xlab("") +
   ylab("") +
   theme_bw()
@@ -301,12 +415,10 @@ set.seed(0311)
 length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor_y, n = nrow(pace_level))
 
 ## calculate alpha based on the total number of times a word was used
-## originally used minmax, but then decided to adjust to the log scale to make differences slightly less pronounced
-## make sure every word has an alpha of at least 0.2 (see adjustment below)
-## since for now, I want every word to be plotted
+## see additional notes above 
 length_level$alpha <-  (log(length_level$total_count) - min(log(length_level$total_count)))/
                           max(log(length_level$total_count))
-length_level$alpha_updated <- ifelse(length_level$alpha > 0.2, length_level$alpha, 0.2)
+length_level$alpha_updated <- ifelse(length_level$alpha > 0.1, length_level$alpha, 0.1)
 
 ## specify x plotting limits
 plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x)))) 

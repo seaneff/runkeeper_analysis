@@ -7,6 +7,7 @@ library(ranger)
 library(tm)
 library(slam)
 library(ggplot2)
+library(ggmap)
 library(wordcloud)
 library(XML)
 library(plyr)
@@ -41,20 +42,29 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
   popViewport()
 }
 
+####################################################################
+## specify time range and location of data #########################
+####################################################################
+
+## name of subdirectory (must be in the data directory) containing GPX workout data
+## and cardioActivities file
+directory_name <- "runkeeper-data-export-41471231-2016-09-01-2006"
+
+## time range is set manually in export, specify which one was used here
+time_range <- "1/1/2015 - 9/1/2016"
+
 #####################################################################
 ## load and format runkeeper data (non-gpx) #########################
 #####################################################################
 
-workout <- read.csv("data/runkeeper-data-export-41471231-2016-08-08-2358/cardioActivities.csv")
+workout <- read.csv(paste("data/", directory_name, "/cardioActivities.csv", sep = ""))
 
 ## format selected variables
 workout$Notes <- as.character(workout$Notes)
-workout$notes <- as.POSIXct(workout$Date)
+workout$GPX.File <- as.character(workout$GPX.File)
+workout$Date <- as.POSIXct(workout$Date)
 
-## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2015 - 8/8/2016"
-
-## just look at runs (workout type = "running")
+## just look at runs, not walks or hikes
 run <- workout[which(workout$Type == "Running"),]
 
 ## exclude tough mudder
@@ -74,21 +84,21 @@ run$morning_afternoon <- factor(ifelse(run$time_of_day < "12:00:00", "morning", 
 ## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
 ## reference: https://gist.github.com/holgerbrandl/5595165
 
-# gpx files in data subdirectory
-gpx_files <- paste("data/runkeeper-data-export-41471231-2016-08-08-2358/",
-                   dir(path = "data/runkeeper-data-export-41471231-2016-08-08-2358", 
-                 pattern = "\\.gpx"), sep = "")
+for (i in 1:nrow(run)) {
 
-for (i in 1:length(gpx_files)) {
-  curr_route <- xmlParse(gpx_files[i], useInternalNodes = TRUE)
+  gpx_file <- run$GPX.File[i]
+  
+  if(gpx_file != ""){
+  curr_route <- xmlParse(paste("data/", directory_name, "/", gpx_file, sep = ""), useInternalNodes = TRUE)
   route_df <- ldply(xpathSApply(curr_route, "//*[local-name()='trkpt']"), 
                     function(x) unlist(xmlToList(x)))
   colnames(route_df) <- c("elevation", "datetime", "lat", "lon")
-  trackdata <- data.frame(datetime=route_df$datetime, 
+  trackdata <- data.frame(datetime = route_df$datetime, 
                           colwise(as.numeric, .(elevation, lat, lon))(route_df))
   trackdata$run_id <- i
   if(i == 1){ full_runs <- trackdata }
   if(i > 1) {full_runs <- rbind.data.frame(full_runs, trackdata)}
+  }
 }
 
 
@@ -103,7 +113,7 @@ hist(run$Distance..mi,
      xlab = "Distance (in miles)",
      col = "#3a33a3",
      main = "Overall Run Distance",
-     xlim = c(0, 12),
+     xlim = c(0, 14),
      ylim = c(0, length(run$Distance..mi)/1.75))
 box()
 legend("topright",
@@ -127,7 +137,7 @@ ggplot(run, aes(Distance..mi.)) +
   geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
   xlab("Distance (in miles)") +
   ylab("Number of Runs") +
-  facet_wrap(~ morning_afternoon, nrow = 2)
+  facet_wrap(~ morning_afternoon, nrow = 2, scales = "free")
 dev.off()
                      
 #####################################################################
@@ -179,11 +189,7 @@ map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]),
                            maptype = "watercolor", source = "stamen",
                            zoom = 12)
 
-## pull watercolor map from API
-map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]), 
-                          maptype = "watercolor", source = "stamen",
-                          zoom = 12)
-
+## pull roadmap from API
 map_roadmap <- get_map(location = c(clusters[i,2], clusters[i,1]), 
                 maptype = "roadmap", source = "google",
                 zoom = 12, color = "bw")
@@ -200,7 +206,7 @@ wc <- ggmap(map_watercolor, extent = "device") +
 
 print(wc)
 
-## plot map with tracks (watercolor)
+## plot map with tracks (roadmap)
 r <- ggmap(map_roadmap, extent = "device") +
   theme(axis.line = element_line(color = NA)) + 
   xlab("") + ylab("") 

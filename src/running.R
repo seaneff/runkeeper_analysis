@@ -12,6 +12,7 @@ library(wordcloud)
 library(XML)
 library(plyr)
 library(fpc)
+library(scales)
 
 #####################################################################
 ## set plotting parameters ##########################################
@@ -48,10 +49,10 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 
 ## name of subdirectory (must be in the data directory) containing GPX workout data
 ## and cardioActivities file
-directory_name <- "runkeeper-data-export-41471231-2016-09-01-2006"
+directory_name <- "runkeeper-data-export-41471231-2016-09-25-2050"
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2015 - 9/1/2016"
+time_range <- "1/1/2015 - 9/25/2016"
 
 #####################################################################
 ## load and format runkeeper data (non-gpx) #########################
@@ -73,8 +74,20 @@ run <- run[-which(run$Notes == "Tough Mudder in Portland Maine"),]
 ## reformat pace and time of day as time
 run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
 run$time_of_day <- format(as.POSIXct(run$Date), "%H:%M:%S")
+
+## identify whether a run was in the morning or afternoon/evening
 run$morning_afternoon <- factor(ifelse(run$time_of_day < "12:00:00", "morning", "afternoon/evening"),
                                 levels = c("morning", "afternoon/evening"))
+
+## identify run month and year
+run$date_formatted <-  as.Date(gsub( " .*$", "", run$Date))
+run$year <- as.numeric(gsub( "-.*$", "", run$Date))
+run$month <- months(run$date_formatted, abbreviate = FALSE)
+
+## identify day of the week, treat is as a factor 
+run$weekday <- factor(weekdays(run$date_formatted),
+                      levels = c("Monday", "Tuesday", "Wednesday",
+                                 "Thursday", "Friday", "Saturday", "Sunday"))
 
 #####################################################################
 ## load and format gpx data #########################################
@@ -100,7 +113,6 @@ for (i in 1:nrow(run)) {
   if(i > 1) {full_runs <- rbind.data.frame(full_runs, trackdata)}
   }
 }
-
 
 #####################################################################
 ## Distribution of run length #######################################
@@ -137,7 +149,21 @@ ggplot(run, aes(Distance..mi.)) +
   geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
   xlab("Distance (in miles)") +
   ylab("Number of Runs") +
-  facet_wrap(~ morning_afternoon, nrow = 2, scales = "free")
+  facet_wrap(~ morning_afternoon, nrow = 2, scales = "free_y")
+dev.off()
+
+#####################################################################
+## Distribution of run length by day of week ########################
+#####################################################################
+
+pdf("results/run_length_by_day_of_week.pdf", height = 8, width = 4)
+ggplot(run, aes(Distance..mi.)) + 
+  ggtitle("Distribution of Run Length by Time of Day") +
+  geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
+  xlab("Distance (in miles)") +
+  ylab("Number of Runs") +
+  facet_wrap(~ weekday, nrow = 7, scales = "free_y") +
+  scale_y_continuous(breaks = pretty_breaks()) ## only integers on y axis
 dev.off()
                      
 #####################################################################
@@ -213,7 +239,7 @@ r <- ggmap(map_roadmap, extent = "device") +
 
 for( j in unique(full_runs$run_id)) {
   r <- r + geom_path(data = full_runs[which(full_runs$run_id == j),], 
-                     col = "dark blue", size = 1, lineend = "round", alpha = 0.4,
+                     col = "dark blue", size = 0.8, lineend = "round", alpha = 0.2,
                      col = "bw")
 }
 
@@ -247,10 +273,14 @@ run[-which(complete.cases(run$Climb..ft.)),]$Climb..ft. <- impute_climb_predicti
 ## predict average pace based on distance, time of day, and elevation/climb ####
 ################################################################################
 
-pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + Climb..ft., 
+pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
+                          Climb..ft. + year + month, 
                           data = run, num.trees = 500,
                           mtry = 1, importance = "impurity",
                           write.forest = TRUE)
+
+## just curious
+importance(pace_by_time_rf)
 
 ##############################################################
 ## calculate residual for each random forest prediction ######
@@ -330,7 +360,7 @@ length_level$log_rr <- log((length_level$p_long + 0.001) / (length_level$p_short
 
 ## calculate x axis position:
 ## add a bit of a jitter (add random noise along the x axis to avoid overlapping words)
-plotting_randomness_factor <- 1.5
+plotting_randomness_factor <- 1.2
 set.seed(1202)
 length_level$x <- length_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor, n = nrow(length_level))
 
@@ -411,13 +441,13 @@ pace_level$log_rr <- log((pace_level$p_fast + 0.001) / (pace_level$p_slow + 0.00
 
 ## calculate x axis position based on length-based relative risk:
 ## add a bit of a jitter (add random noise along the x axis to avoid overlapping words)
-plotting_randomness_factor_x <- 1.5
+plotting_randomness_factor_x <- 1.2
 set.seed(1202)
 length_level$x <- length_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor_x, n = nrow(length_level))
 
 ## calculate y axis position based on pace-based relative risk:
 ## add a bit of a jitter (add random noise along the y axis to avoid overlapping words)
-plotting_randomness_factor_y <- 1.5
+plotting_randomness_factor_y <- 1.2
 set.seed(0311)
 length_level$y <- pace_level$log_rr + rnorm(mean = 0, sd = plotting_randomness_factor_y, n = nrow(pace_level))
 

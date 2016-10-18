@@ -49,10 +49,10 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 
 ## name of subdirectory (must be in the data directory) containing GPX workout data
 ## and cardioActivities file
-directory_name <- "runkeeper-data-export-41471231-2016-09-25-2050"
+directory_name <- "runkeeper-data-export-41471231-2016-10-18-0109"
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2015 - 9/25/2016"
+time_range <- "1/1/2015 - 10/17/2016"
 
 #####################################################################
 ## load and format runkeeper data (non-gpx) #########################
@@ -191,7 +191,7 @@ dev.off()
 # Identify geospatial clusters of run locations
 # Partitioning around medoids 
 
-num_locations <- 3
+num_locations <- 6
 clusters <- pamk(full_runs[,c("lat", "lon")], 
                  krange = num_locations:20, 
                  diss = TRUE, usepam = FALSE)$pamobject$medoids
@@ -465,12 +465,15 @@ plotting_limit_y <- 1.1*max(c(abs(min(length_level$y)), abs(length_level$y)))
 
 ## generate figure
 pdf("results/positioned_wordcloud_distance_pace.pdf", height = 5, width = 9)
-ggplot(length_level, aes(x = x , y = y, alpha = alpha_updated)) + 
+## only words that were used in at least two runs
+ggplot(length_level[which(length_level$total_count > 1),], 
+       aes(x = x , y = y, alpha = alpha_updated)) + 
   geom_text(aes(size = total_count,
-                label = row.names(length_level),
+                label = row.names(length_level[which(length_level$total_count > 1),]),
                 colour = log_rr)) +
   scale_size(range = c(3, 5), name = "Number of Runs\nwith Notes\nMentioning Word") +
-  scale_alpha(range = c(min(length_level$alpha_updated), max(length_level$alpha_updated))) +
+  scale_alpha(range = c(min(length_level[which(length_level$total_count > 1),]$alpha_updated), 
+                        max(length_level[which(length_level$total_count > 1),]$alpha_updated))) +
   scale_color_gradient(low = "#8E0045", high = "#0A4877", guide = "none") +  
   scale_x_continuous(breaks = c(-1*plotting_limit_x, 0, plotting_limit_x),
                      limits = c(-1.2*plotting_limit_x, 1.2*plotting_limit_x),

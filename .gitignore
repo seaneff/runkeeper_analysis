@@ -2,3 +2,4 @@ data/*
 .Rapp.history
 .Rhistory
 .RData
+.DS_Store

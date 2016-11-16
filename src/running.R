@@ -49,10 +49,10 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
 
 ## name of subdirectory (must be in the data directory) containing GPX workout data
 ## and cardioActivities file
-directory_name <- "runkeeper-data-export-41471231-2016-10-18-0109"
+directory_name <- "runkeeper-data-export-41471231-2016-11-15-2357"
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2015 - 10/17/2016"
+time_range <- "1/1/2014 - 11/17/2015"
 
 #####################################################################
 ## load and format runkeeper data (non-gpx) #########################
@@ -70,6 +70,10 @@ run <- workout[which(workout$Type == "Running"),]
 
 ## exclude tough mudder
 run <- run[-which(run$Notes == "Tough Mudder in Portland Maine"),]
+
+## identify runs that were on the treadmill
+## (I write "treadmill" in the comments section)
+run$treadmill <- grepl("treadmill", run$Notes, ignore.case = TRUE)
 
 ## reformat pace and time of day as time
 run$avg_pace <- as.POSIXct(run$Average.Pace, format = "%M:%S")
@@ -100,6 +104,7 @@ run$weekday <- factor(weekdays(run$date_formatted),
 for (i in 1:nrow(run)) {
 
   gpx_file <- run$GPX.File[i]
+  print(gpx_file)
   
   if(gpx_file != ""){
   curr_route <- xmlParse(paste("data/", directory_name, "/", gpx_file, sep = ""), useInternalNodes = TRUE)
@@ -177,8 +182,15 @@ plot(run$Distance..mi, run$avg_pace,
      ylab = "Average Pace per Run\n",
      main = "Pace vs. Distance",
      col = "#3a33a3", las = 1)
-makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range),
-             cex = 0.6)
+makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range), cex = 0.6)
+
+ggplot(run, aes(Distance..mi., avg_pace, col = treadmill)) + 
+  geom_point(size = 2, alpha = 0.8) +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_color_manual(name = "Treadmill", values = c("#2b8cbe", "#e7298a")) +
+  scale_y_datetime(labels = date_format("%M:%S"))
 dev.off()
 
 #############################################################################
@@ -191,7 +203,7 @@ dev.off()
 # Identify geospatial clusters of run locations
 # Partitioning around medoids 
 
-num_locations <- 6
+num_locations <- 5
 clusters <- pamk(full_runs[,c("lat", "lon")], 
                  krange = num_locations:20, 
                  diss = TRUE, usepam = FALSE)$pamobject$medoids
@@ -273,10 +285,12 @@ run[-which(complete.cases(run$Climb..ft.)),]$Climb..ft. <- impute_climb_predicti
 ## predict average pace based on distance, time of day, and elevation/climb ####
 ################################################################################
 
+## eventually want to choose parameters based on cross-validation
 pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
-                          Climb..ft. + year + month, 
+                          Climb..ft. + year + month + treadmill, 
                           data = run, num.trees = 500,
-                          mtry = 1, importance = "impurity",
+                          min.node.size = 2, mtry = 4, 
+                          importance = "impurity",
                           write.forest = TRUE)
 
 ## just curious
@@ -291,6 +305,23 @@ importance(pace_by_time_rf)
 ## positive residuals = ran faster than expected (prediction < actual)
 
 run$residual <- run$Average.Speed..mph. - predict(pace_by_time_rf, run)$predictions 
+
+## evaluate model fit
+model_fit <- cbind.data.frame(actual = run$Average.Speed..mph.,
+                              predicted = predict(pace_by_time_rf, run)$predictions)
+
+## eventually want to do this on a holdout set of data
+
+pdf("results/model_fit.pdf", height = 3, width = 5)
+ggplot(model_fit, aes(actual, predicted)) + 
+  geom_point(size = 2, alpha = 0.8, col = "#e7298a") +
+  xlab("Actual Miles per Hour") + 
+  ylab("Predicted Miles per Hour") +
+  ggtitle("Predicted vs. Actual Miles per Hour") +
+  xlim(c(3, 10)) +
+  ylim(c(3, 10)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dotted")
+dev.off()
 
 ################################################
 ## process free text ###########################
@@ -463,13 +494,15 @@ plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x))
 ## specify y plotting limits
 plotting_limit_y <- 1.1*max(c(abs(min(length_level$y)), abs(length_level$y))) 
 
+min_word_count <- 2
+
 ## generate figure
 pdf("results/positioned_wordcloud_distance_pace.pdf", height = 5, width = 9)
 ## only words that were used in at least two runs
-ggplot(length_level[which(length_level$total_count > 1),], 
+ggplot(length_level[which(length_level$total_count >= min_word_count),], 
        aes(x = x , y = y, alpha = alpha_updated)) + 
   geom_text(aes(size = total_count,
-                label = row.names(length_level[which(length_level$total_count > 1),]),
+                label = row.names(length_level[which(length_level$total_count >= min_word_count),]),
                 colour = log_rr)) +
   scale_size(range = c(3, 5), name = "Number of Runs\nwith Notes\nMentioning Word") +
   scale_alpha(range = c(min(length_level[which(length_level$total_count > 1),]$alpha_updated), 

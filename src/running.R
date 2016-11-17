@@ -13,6 +13,7 @@ library(XML)
 library(plyr)
 library(fpc)
 library(scales)
+library(dplyr)
 
 #####################################################################
 ## set plotting parameters ##########################################
@@ -68,8 +69,10 @@ workout$Date <- as.POSIXct(workout$Date)
 ## just look at runs, not walks or hikes
 run <- workout[which(workout$Type == "Running"),]
 
-## exclude tough mudder
-run <- run[-which(run$Notes == "Tough Mudder in Portland Maine"),]
+## exclude tough mudder, if it's included in data
+if(any(run$Notes == "Tough Mudder in Portland Maine")){
+  run <- run[-which(run$Notes == "Tough Mudder in Portland Maine"),]
+}
 
 ## identify runs that were on the treadmill
 ## (I write "treadmill" in the comments section)
@@ -285,16 +288,72 @@ run[-which(complete.cases(run$Climb..ft.)),]$Climb..ft. <- impute_climb_predicti
 ## predict average pace based on distance, time of day, and elevation/climb ####
 ################################################################################
 
-## eventually want to choose parameters based on cross-validation
+set.seed(1202)
+cv_index <- sample(1:10, nrow(run), replace = TRUE)
+counter <- 0
+
+for(min.node.size in 1:4){
+  for(mtry in 2:5){
+    for(i in 1:10){
+      ## eventually want to choose parameters based on cross-validation
+      pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
+                            Climb..ft. + year + month + treadmill, 
+                            data = run[-which(cv_index == i),], 
+                            num.trees = 500, min.node.size = min.node.size, mtry = mtry, 
+                            importance = "impurity",
+                            write.forest = TRUE)
+  
+  if(counter == 0){
+    
+    results <- data.frame(
+                    min.node.size = min.node.size,
+                    mtry = mtry,
+                    holdout_group = rep(i, sum(cv_index == i)),
+                    observed = run[which(cv_index == i),]$Average.Speed..mph.,
+                    predicted = predict(pace_by_time_rf, data = run[which(cv_index == i),])$predictions)
+    } else {
+    
+    results <- rbind.data.frame(results,
+                    data.frame(min.node.size = min.node.size,
+                    mtry = mtry,
+                    data.frame(holdout_group = rep(i, sum(cv_index == i)),
+                    observed = run[which(cv_index == i),]$Average.Speed..mph.,
+                    predicted = predict(pace_by_time_rf, data = run[which(cv_index == i),])$predictions))
+    )
+    }
+      counter <- counter + 1
+    }
+  }
+}
+
+################################################################################
+## evaluate parameter selection ################################################
+################################################################################
+
+performance <- summarize(group_by(results,min.node.size, mtry),
+                         rmse = sqrt(sum((observed - predicted)^2)/length(observed)))
+                   
+ggplot(data = performance, aes(x = mtry, y = rmse, 
+                               group = min.node.size,
+                               col = factor(min.node.size))) + 
+  geom_line(size = 1.5) + 
+  geom_point(size = 3, fill = "white") +
+  scale_shape_manual(values = c(22,21)) +
+  ylab("Root Mean Squared Error") +
+  xlab("mtry") +
+  ggtitle("Random Forest Parameter Selection\n(mean of tenfold CV)") +
+  scale_color_discrete(name = "minimum node size")
+
+################################################################################
+## selected final model ########################################################
+################################################################################
+
 pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
-                          Climb..ft. + year + month + treadmill, 
-                          data = run, num.trees = 500,
-                          min.node.size = 2, mtry = 4, 
+                            Climb..ft. + year + month + treadmill, 
+                          data = run[-which(cv_index == i),], 
+                          num.trees = 500, min.node.size = 3, mtry = 2, 
                           importance = "impurity",
                           write.forest = TRUE)
-
-## just curious
-importance(pace_by_time_rf)
 
 ##############################################################
 ## calculate residual for each random forest prediction ######

@@ -330,18 +330,33 @@ for(min.node.size in 1:4){
 ## evaluate parameter selection ################################################
 ################################################################################
 
-performance <- summarize(group_by(results,min.node.size, mtry),
-                         rmse = sqrt(sum((observed - predicted)^2)/length(observed)))
+performance_iter <- summarize(group_by(results, min.node.size, mtry, holdout_group),
+                              rmse = sqrt(sum((observed - predicted)^2)/length(observed)))
+
+performance <- summarize(group_by(performance_iter, min.node.size, mtry),
+                         mean_rmse = mean(rmse),
+                         median_rmse = median(rmse))
                    
-ggplot(data = performance, aes(x = mtry, y = rmse, 
+ggplot(data = performance, aes(x = mtry, y = mean_rmse, 
                                group = min.node.size,
                                col = factor(min.node.size))) + 
   geom_line(size = 1.5) + 
   geom_point(size = 3, fill = "white") +
   scale_shape_manual(values = c(22,21)) +
-  ylab("Root Mean Squared Error") +
+  ylab("Mean of Root Mean Squared Error") +
   xlab("mtry") +
   ggtitle("Random Forest Parameter Selection\n(mean of tenfold CV)") +
+  scale_color_discrete(name = "minimum node size")
+
+ggplot(data = performance, aes(x = mtry, y = median_rmse, 
+                               group = min.node.size,
+                               col = factor(min.node.size))) + 
+  geom_line(size = 1.5) + 
+  geom_point(size = 3, fill = "white") +
+  scale_shape_manual(values = c(22,21)) +
+  ylab("Median of Root Mean Squared Error") +
+  xlab("mtry") +
+  ggtitle("Random Forest Parameter Selection\n(median of tenfold CV)") +
   scale_color_discrete(name = "minimum node size")
 
 ################################################################################

@@ -292,9 +292,13 @@ set.seed(1202)
 cv_index <- sample(1:10, nrow(run), replace = TRUE)
 counter <- 0
 
-for(min.node.size in 1:4){
-  for(mtry in 2:5){
-    for(i in 1:10){
+mtry.range <- 2:5
+fold.cv <- 10
+min.node.size.range <- 1:4
+
+for(min.node.size in min.node.size.range){
+  for(mtry in mtry.range){
+    for(i in 1:fold.cv){
       ## eventually want to choose parameters based on cross-validation
       pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
                             Climb..ft. + year + month + treadmill, 
@@ -311,6 +315,7 @@ for(min.node.size in 1:4){
                     holdout_group = rep(i, sum(cv_index == i)),
                     observed = run[which(cv_index == i),]$Average.Speed..mph.,
                     predicted = predict(pace_by_time_rf, data = run[which(cv_index == i),])$predictions)
+    
     } else {
     
     results <- rbind.data.frame(results,
@@ -318,8 +323,7 @@ for(min.node.size in 1:4){
                     mtry = mtry,
                     data.frame(holdout_group = rep(i, sum(cv_index == i)),
                     observed = run[which(cv_index == i),]$Average.Speed..mph.,
-                    predicted = predict(pace_by_time_rf, data = run[which(cv_index == i),])$predictions))
-    )
+                    predicted = predict(pace_by_time_rf, data = run[which(cv_index == i),])$predictions)))
     }
       counter <- counter + 1
     }
@@ -336,18 +340,8 @@ performance_iter <- summarize(group_by(results, min.node.size, mtry, holdout_gro
 performance <- summarize(group_by(performance_iter, min.node.size, mtry),
                          mean_rmse = mean(rmse),
                          median_rmse = median(rmse))
-                   
-ggplot(data = performance, aes(x = mtry, y = mean_rmse, 
-                               group = min.node.size,
-                               col = factor(min.node.size))) + 
-  geom_line(size = 1.5) + 
-  geom_point(size = 3, fill = "white") +
-  scale_shape_manual(values = c(22,21)) +
-  ylab("Mean of Root Mean Squared Error") +
-  xlab("mtry") +
-  ggtitle("Random Forest Parameter Selection\n(mean of tenfold CV)") +
-  scale_color_discrete(name = "minimum node size")
 
+pdf("results/model_parameter_selection.pdf", height = 4, width = 6)
 ggplot(data = performance, aes(x = mtry, y = median_rmse, 
                                group = min.node.size,
                                col = factor(min.node.size))) + 
@@ -359,6 +353,25 @@ ggplot(data = performance, aes(x = mtry, y = median_rmse,
   ggtitle("Random Forest Parameter Selection\n(median of tenfold CV)") +
   scale_color_discrete(name = "minimum node size")
 
+                   
+ggplot(data = performance, aes(x = mtry, y = mean_rmse, 
+                               group = min.node.size,
+                               col = factor(min.node.size))) + 
+  geom_line(size = 1.5) + 
+  geom_point(size = 3, fill = "white") +
+  scale_shape_manual(values = c(22,21)) +
+  ylab("Mean of Root Mean Squared Error") +
+  xlab("mtry") +
+  ggtitle("Random Forest Parameter Selection\n(mean of tenfold CV)") +
+  scale_color_discrete(name = "minimum node size")
+dev.off()
+
+################################################################################
+## choose random forest parameters based on cross-validation results ###########
+################################################################################
+
+best_performance <- performance[which(performance$median_rmse == min(performance$median_rmse)),]
+
 ################################################################################
 ## selected final model ########################################################
 ################################################################################
@@ -366,7 +379,9 @@ ggplot(data = performance, aes(x = mtry, y = median_rmse,
 pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
                             Climb..ft. + year + month + treadmill, 
                           data = run[-which(cv_index == i),], 
-                          num.trees = 500, min.node.size = 3, mtry = 2, 
+                          num.trees = 500, 
+                          min.node.size = best_performance$min.node.size, 
+                          mtry = best_performance$mtry, 
                           importance = "impurity",
                           write.forest = TRUE)
 

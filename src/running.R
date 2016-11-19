@@ -298,6 +298,8 @@ min.node.size.range <- 1:4
 
 for(min.node.size in min.node.size.range){
   for(mtry in mtry.range){
+    print(paste("fitting model with mtry =", mtry.range, 
+                "and minimum node size =", min.node.size))
     for(i in 1:fold.cv){
       ## eventually want to choose parameters based on cross-validation
       pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
@@ -335,13 +337,25 @@ for(min.node.size in min.node.size.range){
 ################################################################################
 
 performance_iter <- summarize(group_by(results, min.node.size, mtry, holdout_group),
-                              rmse = sqrt(sum((observed - predicted)^2)/length(observed)))
+                              rmse = sqrt(mean((observed - predicted)^2)))
 
 performance <- summarize(group_by(performance_iter, min.node.size, mtry),
                          mean_rmse = mean(rmse),
                          median_rmse = median(rmse))
 
 pdf("results/model_parameter_selection.pdf", height = 4, width = 6)
+
+ggplot(data = performance_iter, aes(x = mtry, y = rmse, 
+                          group = interaction(min.node.size, mtry),
+                          col = factor(min.node.size))) + 
+  geom_boxplot(fill = "white", alpha = 0.8) +
+  scale_shape_manual(values = c(22,21)) +
+  ylab("Root Mean Squared Error") +
+  xlab("mtry") +
+  ggtitle("Random Forest Parameter Selection\n(all iterations)") +
+  scale_color_discrete(name = "minimum node size") +
+  scale_x_continuous(breaks = pretty_breaks())
+
 ggplot(data = performance, aes(x = mtry, y = median_rmse, 
                                group = min.node.size,
                                col = factor(min.node.size))) + 
@@ -353,7 +367,6 @@ ggplot(data = performance, aes(x = mtry, y = median_rmse,
   ggtitle("Random Forest Parameter Selection\n(median of tenfold CV)") +
   scale_color_discrete(name = "minimum node size")
 
-                   
 ggplot(data = performance, aes(x = mtry, y = mean_rmse, 
                                group = min.node.size,
                                col = factor(min.node.size))) + 
@@ -373,7 +386,7 @@ dev.off()
 best_performance <- performance[which(performance$median_rmse == min(performance$median_rmse)),]
 
 ################################################################################
-## selected final model ########################################################
+## selected final model: full ##################################################
 ################################################################################
 
 pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
@@ -394,19 +407,30 @@ pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoo
 ## positive residuals = ran faster than expected (prediction < actual)
 
 run$residual <- run$Average.Speed..mph. - predict(pace_by_time_rf, run)$predictions 
-
+  
 ## evaluate model fit
 model_fit <- cbind.data.frame(actual = run$Average.Speed..mph.,
                               predicted = predict(pace_by_time_rf, run)$predictions)
 
-## eventually want to do this on a holdout set of data
-
-pdf("results/model_fit.pdf", height = 3, width = 5)
+pdf("results/model_fit_itself.pdf", height = 3, width = 5)
 ggplot(model_fit, aes(actual, predicted)) + 
   geom_point(size = 2, alpha = 0.8, col = "#e7298a") +
   xlab("Actual Miles per Hour") + 
   ylab("Predicted Miles per Hour") +
   ggtitle("Predicted vs. Actual Miles per Hour") +
+  xlim(c(3, 10)) +
+  ylim(c(3, 10)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dotted")
+dev.off()
+
+pdf("results/model_fit_cross_validated.pdf", height = 3, width = 5)
+ggplot(results[which(results$min.node.size == best_performance$min.node.size &
+                     results$mtry == best_performance$mtry),], 
+       aes(observed, predicted)) + 
+  geom_point(size = 2, alpha = 0.8, col = "#e7298a") +
+  xlab("Actual Miles per Hour") + 
+  ylab("Predicted Miles per Hour") +
+  ggtitle("Predicted vs. Actual Miles per Hour\n(Cross-Validation Results)") +
   xlim(c(3, 10)) +
   ylim(c(3, 10)) +
   geom_abline(intercept = 0, slope = 1, linetype = "dotted")

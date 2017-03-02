@@ -14,6 +14,8 @@ library(plyr)
 library(fpc)
 library(scales)
 library(dplyr)
+library(sqldf)
+library(lda_tuning)
 
 #####################################################################
 ## set plotting parameters ##########################################
@@ -44,16 +46,34 @@ makeFootnote <- function(text = format(Sys.time(), "%d %b %Y"),
   popViewport()
 }
 
+#####################################################################
+## define function to break up dates ################################
+## used for plotting dates on continuous color scale in figures below 
+#####################################################################
+
+## based on stackoverflow function
+## http://stackoverflow.com/questions/5380417/is-there-a-way-of-manipulating-ggplot-scale-breaks-and-labels/5380817#5380817
+
+dateBreaks <- function(x){
+  breaks <- c(min(x), median(x), max(x))
+  attr(breaks, "labels") <- as.Date(breaks, origin = "1970-01-01")
+  names(breaks) <- attr(breaks, "labels")
+  return(breaks)
+}
+
 ####################################################################
 ## specify time range and location of data #########################
 ####################################################################
 
 ## name of subdirectory (must be in the data directory) containing GPX workout data
 ## and cardioActivities file
-directory_name <- "runkeeper-data-export-41471231-2016-11-15-2357"
+directory_name <- "runkeeper-data-export-41471231-2017-02-20-0155"
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "1/1/2014 - 11/17/2015"
+time_range <- "3/1/2015 - 2/19/2017"
+
+race_dates <- c("2015-10-31", "2015-11-26", "2016-06-09", "2016-10-08",
+                "2016-11-24")
 
 #####################################################################
 ## load and format runkeeper data (non-gpx) #########################
@@ -91,10 +111,42 @@ run$date_formatted <-  as.Date(gsub( " .*$", "", run$Date))
 run$year <- as.numeric(gsub( "-.*$", "", run$Date))
 run$month <- months(run$date_formatted, abbreviate = FALSE)
 
+## identify runs that were races
+run$race <- ifelse(as.character(run$date_formatted) %in% race_dates, TRUE, FALSE)
+
 ## identify day of the week, treat is as a factor 
 run$weekday <- factor(weekdays(run$date_formatted),
                       levels = c("Monday", "Tuesday", "Wednesday",
                                  "Thursday", "Friday", "Saturday", "Sunday"))
+
+## reformat some annoyingly named features
+names(run)[which(names(run) == "Distance..mi.")] <- "distance_mi"
+names(run)[which(names(run) == "Climb..ft.")] <- "climb_ft"
+
+## number of runs in the past 7, 14, and 30 days
+run_counts <- sqldf("select r1.date_formatted as date__Date, 
+              count(distinct r2.date_formatted) as run_count_past_7_days,
+              sum(case when r2.date_formatted is not null then r2.distance_mi else 0 end) as run_length_past_7_days,
+              count(distinct r3.date_formatted) as run_count_past_14_days,
+              sum(case when r3.date_formatted is not null then r3.distance_mi else 0 end) as run_length_past_14_days,
+              count(distinct r4.date_formatted) as run_count_past_30_days,
+              sum(case when r4.date_formatted is not null then r4.distance_mi else 0 end) as run_length_past_30_days
+            from run as r1
+            left join run as r2
+                 on (r1.date_formatted - r2.date_formatted < 7 and
+                 r1.date_formatted - r2.date_formatted > 0)
+            left join run as r3
+                 on (r1.date_formatted - r3.date_formatted < 14 and
+                 r1.date_formatted - r3.date_formatted > 0)
+            left join run as r4
+                 on (r1.date_formatted - r4.date_formatted < 30 and
+                 r1.date_formatted - r4.date_formatted > 0)
+            group by r1.date_formatted",
+            method = "name__class")
+
+run <- merge(run, run_counts,
+              all.x = TRUE,
+              by.x = "date_formatted", by.y = "date")
 
 #####################################################################
 ## load and format gpx data #########################################
@@ -107,7 +159,7 @@ run$weekday <- factor(weekdays(run$date_formatted),
 for (i in 1:nrow(run)) {
 
   gpx_file <- run$GPX.File[i]
-  print(gpx_file)
+  print(paste("reading in", gpx_file, "(", i, "of", prettyNum(nrow(run), big.mark = ","), ")"))
   
   if(gpx_file != ""){
   curr_route <- xmlParse(paste("data/", directory_name, "/", gpx_file, sep = ""), useInternalNodes = TRUE)
@@ -128,19 +180,20 @@ for (i in 1:nrow(run)) {
 
 pdf("results/run_length.pdf", height = 4, width = 5)
 par(mar = mar_default + c(2, 0, 0, 0))
-hist(run$Distance..mi,
+hist(run$distance_mi,
      ylab = "Number of Runs",
      xlab = "Distance (in miles)",
      col = "#3a33a3",
      main = "Overall Run Distance",
+     breaks = 20,
      xlim = c(0, 14),
-     ylim = c(0, length(run$Distance..mi)/1.75))
+     ylim = c(0, length(run$distance_mi)/4))
 box()
 legend("topright",
-       legend = c(paste("median:", round(median(run$Distance..mi), 1), "miles"),
-                  paste("IQR: [",  round(quantile(run$Distance..mi, .25), 1),
+       legend = c(paste("median:", round(median(run$distance_mi), 1), "miles"),
+                  paste("IQR: [",  round(quantile(run$distance_mi, .25), 1),
                         ", ", 
-                        round(quantile(run$Distance..mi, .75), 1), "] miles",
+                        round(quantile(run$distance_mi, .75), 1), "] miles",
                         sep = "")),
        bg = "gray90")
 makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range),
@@ -152,7 +205,7 @@ dev.off()
 #####################################################################
 
 pdf("results/run_length_by_time_of_day.pdf", height = 4, width = 4)
-ggplot(run, aes(Distance..mi.)) + 
+ggplot(run, aes(distance_mi)) + 
   ggtitle("Distribution of Run Length by Time of Day") +
   geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
   xlab("Distance (in miles)") +
@@ -165,7 +218,7 @@ dev.off()
 #####################################################################
 
 pdf("results/run_length_by_day_of_week.pdf", height = 8, width = 4)
-ggplot(run, aes(Distance..mi.)) + 
+ggplot(run, aes(distance_mi)) + 
   ggtitle("Distribution of Run Length by Time of Day") +
   geom_histogram(fill = "dark blue", col = "gray50",  binwidth = 1) +
   xlab("Distance (in miles)") +
@@ -179,21 +232,76 @@ dev.off()
 #####################################################################
 
 pdf("results/pace_vs_distance.pdf", height = 4, width = 6)
+
+## general pace vs. distance
 par(mar = mar_default + c(2, 2, 0, 0))
-plot(run$Distance..mi, run$avg_pace,
+plot(run$distance_mi, run$avg_pace,
      xlab = "Miles per Run",
      ylab = "Average Pace per Run\n",
      main = "Pace vs. Distance",
      col = "#3a33a3", las = 1)
 makeFootnote(paste("Based on RunKeeper Run Data\nDate Range:", time_range), cex = 0.6)
 
-ggplot(run, aes(Distance..mi., avg_pace, col = treadmill)) + 
+## pace vs. distance 
+ggplot(run, aes(x = factor(round(distance_mi), levels = 0:max(run$distance_mi)),
+                y = avg_pace)) +
+  geom_boxplot(alpha = 0.8, col = "dark blue", fill = "light blue") +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
+## pace vs. distance by treadmill or not treadmill
+ggplot(run, aes(distance_mi, avg_pace, col = treadmill)) + 
   geom_point(size = 2, alpha = 0.8) +
   xlab("Miles per Run") + 
   ylab("Average Pace per Run") +
   ggtitle("Pace vs. Distance") + 
   scale_color_manual(name = "Treadmill", values = c("#2b8cbe", "#e7298a")) +
-  scale_y_datetime(labels = date_format("%M:%S"))
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
+## pace vs. distance by year
+ggplot(run, aes(distance_mi, avg_pace, col = as.factor(year))) + 
+  geom_point(size = 2, alpha = 0.8) +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_color_discrete(name = "Year") +
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
+## pace vs. distance by year
+ggplot(run, aes(x = factor(round(distance_mi), levels = 0:max(run$distance_mi)),
+                y = avg_pace)) +
+  geom_boxplot(alpha = 0.8, col = "dark blue", fill = "light blue") +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  facet_wrap(~ year) + 
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
+## pace vs. distance by date
+ggplot(run, aes(distance_mi, avg_pace, col = as.integer(date_formatted))) + 
+  geom_point(size = 2, alpha = 0.8) +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_color_continuous(name = "Date", breaks = dateBreaks) +
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
+## pace vs. distance by time of day
+ggplot(run, aes(distance_mi, avg_pace, col = morning_afternoon)) + 
+  geom_point(size = 2, alpha = 0.6) +
+  xlab("Miles per Run") + 
+  ylab("Average Pace per Run") +
+  ggtitle("Pace vs. Distance") + 
+  scale_color_discrete(name = "Time of Day") +
+  scale_y_datetime(labels = date_format("%M:%S")) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
 dev.off()
 
 #############################################################################
@@ -203,12 +311,9 @@ dev.off()
 ## code based on code originally written by Daniel Cook
 ## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
 
-# Identify geospatial clusters of run locations
 # Partitioning around medoids 
-
-num_locations <- 5
 clusters <- pamk(full_runs[,c("lat", "lon")], 
-                 krange = num_locations:20, 
+                 krange = 1:15, 
                  diss = TRUE, usepam = FALSE)$pamobject$medoids
 
 #############################################################################
@@ -225,27 +330,11 @@ pdf("results/maps.pdf", height = 5, width = 5)
 
 for(i in 1:nrow(clusters)){
 
-## pull watercolor map from API
-map_watercolor <- get_map(location = c(clusters[i,2], clusters[i,1]), 
-                           maptype = "watercolor", source = "stamen",
-                           zoom = 12)
-
 ## pull roadmap from API
 map_roadmap <- get_map(location = c(clusters[i,2], clusters[i,1]), 
                 maptype = "roadmap", source = "google",
-                zoom = 12, color = "bw")
+                zoom = 11, color = "bw")
 
-## plot map with tracks (watercolor)
-wc <- ggmap(map_watercolor, extent = "device") +
-  theme(axis.line = element_line(color = NA)) + 
-  xlab("") + ylab("") 
-
-  for( j in unique(full_runs$run_id)) {
-    wc <- wc + geom_path(data = full_runs[which(full_runs$run_id == j),], 
-                         col = "dark blue", size = 1, lineend = "round", alpha = 0.4)
-  }
-
-print(wc)
 
 ## plot map with tracks (roadmap)
 r <- ggmap(map_roadmap, extent = "device") +
@@ -263,26 +352,6 @@ print(r)
 }
 
 dev.off()
-
-#############################################################################
-## imputation for missing elevation data ####################################
-#############################################################################
-
-## if climb.ft is not known, use imputation
-impute_climb <- ranger(Climb..ft. ~ Average.Speed..mph. + Distance..mi.,
-                       data = run[which(complete.cases(run$Climb..ft.)),],
-                       write.forest = TRUE,
-                       num.trees = 500, mtry = 1)
-
-## make predictions for run climb
-impute_climb_predictions <- predict(impute_climb, 
-                                    data = run[-which(complete.cases(run$Climb..ft.)),])
-
-## add indicator to show if climb data were imputed
-run$climb_imputed <- ifelse(is.na(run$Climb..ft.), TRUE, FALSE)
-
-## fill in missing data with imputed precitions
-run[-which(complete.cases(run$Climb..ft.)),]$Climb..ft. <- impute_climb_predictions$predictions
 
 ################################################################################
 ## predict average pace based on distance, time of day, and elevation/climb ####
@@ -302,9 +371,24 @@ for(min.node.size in min.node.size.range){
                 "and minimum node size =", min.node.size))
     for(i in 1:fold.cv){
       ## eventually want to choose parameters based on cross-validation
-      pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
-                            Climb..ft. + year + month + treadmill, 
-                            data = run[-which(cv_index == i),], 
+      pace_by_time_rf <- ranger(Average.Speed..mph. ~ distance_mi + morning_afternoon + 
+                            climb_ft + year + month + treadmill + race +
+                            run_count_past_7_days +
+                            run_count_past_14_days +
+                            run_count_past_30_days, 
+                            data = run[-which(cv_index == i),
+                                       which(names(run) %in% c(
+                                         "Average.Speed..mph.",
+                                         "distance_mi",
+                                         "morning_afternoon",
+                                         "climb_ft",
+                                         "year",
+                                         "month",
+                                         "treadmill",
+                                         "race",
+                                         "run_count_past_7_days",
+                                         "run_count_past_14_days",
+                                         "run_count_past_30_days"))],
                             num.trees = 500, min.node.size = min.node.size, mtry = mtry, 
                             importance = "impurity",
                             write.forest = TRUE)
@@ -344,7 +428,6 @@ performance <- summarize(group_by(performance_iter, min.node.size, mtry),
                          median_rmse = median(rmse))
 
 pdf("results/model_parameter_selection.pdf", height = 4, width = 6)
-
 ggplot(data = performance_iter, aes(x = mtry, y = rmse, 
                           group = interaction(min.node.size, mtry),
                           col = factor(min.node.size))) + 
@@ -354,7 +437,8 @@ ggplot(data = performance_iter, aes(x = mtry, y = rmse,
   xlab("mtry") +
   ggtitle("Random Forest Parameter Selection\n(all iterations)") +
   scale_color_discrete(name = "minimum node size") +
-  scale_x_continuous(breaks = pretty_breaks())
+  scale_x_continuous(breaks = pretty_breaks()) +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
 
 ggplot(data = performance, aes(x = mtry, y = median_rmse, 
                                group = min.node.size,
@@ -365,7 +449,8 @@ ggplot(data = performance, aes(x = mtry, y = median_rmse,
   ylab("Median of Root Mean Squared Error") +
   xlab("mtry") +
   ggtitle("Random Forest Parameter Selection\n(median of tenfold CV)") +
-  scale_color_discrete(name = "minimum node size")
+  scale_color_discrete(name = "minimum node size") +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
 
 ggplot(data = performance, aes(x = mtry, y = mean_rmse, 
                                group = min.node.size,
@@ -376,7 +461,9 @@ ggplot(data = performance, aes(x = mtry, y = mean_rmse,
   ylab("Mean of Root Mean Squared Error") +
   xlab("mtry") +
   ggtitle("Random Forest Parameter Selection\n(mean of tenfold CV)") +
-  scale_color_discrete(name = "minimum node size")
+  scale_color_discrete(name = "minimum node size") +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
 dev.off()
 
 ################################################################################
@@ -389,14 +476,32 @@ best_performance <- performance[which(performance$median_rmse == min(performance
 ## selected final model: full ##################################################
 ################################################################################
 
-pace_by_time_rf <- ranger(Average.Speed..mph. ~ Distance..mi. + morning_afternoon + 
-                            Climb..ft. + year + month + treadmill, 
-                          data = run[-which(cv_index == i),], 
+pace_by_time_rf <- ranger(Average.Speed..mph. ~ distance_mi + morning_afternoon + 
+                            Climb..ft. + year + month + treadmill + race +
+                            run_count_past_7_days +
+                            run_count_past_14_days +
+                            run_count_past_30_days,
+                          data = run[-which(cv_index == i),
+                                     which(names(run) %in% c(
+                                       "Average.Speed..mph.",
+                                       "distance_mi",
+                                       "morning_afternoon",
+                                       "Climb..ft.",
+                                       "year",
+                                       "month",
+                                       "treadmill",
+                                       "race",
+                                       "run_count_past_7_days",
+                                       "run_count_past_14_days",
+                                       "run_count_past_30_days"))], 
                           num.trees = 500, 
                           min.node.size = best_performance$min.node.size, 
                           mtry = best_performance$mtry, 
                           importance = "impurity",
                           write.forest = TRUE)
+
+## examine variable importance
+sort(importance(pace_by_time_rf))
 
 ##############################################################
 ## calculate residual for each random forest prediction ######
@@ -410,11 +515,21 @@ run$residual <- run$Average.Speed..mph. - predict(pace_by_time_rf, run)$predicti
   
 ## evaluate model fit
 model_fit <- cbind.data.frame(actual = run$Average.Speed..mph.,
-                              predicted = predict(pace_by_time_rf, run)$predictions)
+                              predicted = predict(pace_by_time_rf, run)$predictions,
+                              race = run$race)
 
 pdf("results/model_fit_itself.pdf", height = 3, width = 5)
 ggplot(model_fit, aes(actual, predicted)) + 
-  geom_point(size = 2, alpha = 0.8, col = "#e7298a") +
+  geom_point(size = 2, alpha = 0.3, col = "#e7298a") +
+  xlab("Actual Miles per Hour") + 
+  ylab("Predicted Miles per Hour") +
+  ggtitle("Predicted vs. Actual Miles per Hour") +
+  xlim(c(3, 10)) +
+  ylim(c(3, 10)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dotted")
+
+ggplot(model_fit, aes(actual, predicted, col = race)) + 
+  geom_point(size = 2, alpha = 0.3) +
   xlab("Actual Miles per Hour") + 
   ylab("Predicted Miles per Hour") +
   ggtitle("Predicted vs. Actual Miles per Hour") +
@@ -427,7 +542,7 @@ pdf("results/model_fit_cross_validated.pdf", height = 3, width = 5)
 ggplot(results[which(results$min.node.size == best_performance$min.node.size &
                      results$mtry == best_performance$mtry),], 
        aes(observed, predicted)) + 
-  geom_point(size = 2, alpha = 0.8, col = "#e7298a") +
+  geom_point(size = 2, alpha = 0.3, col = "#e7298a") +
   xlab("Actual Miles per Hour") + 
   ylab("Predicted Miles per Hour") +
   ggtitle("Predicted vs. Actual Miles per Hour\n(Cross-Validation Results)") +
@@ -472,10 +587,10 @@ dev.off()
 ################################################
 
 ## median distance of all runs
-median_distance <- median(run$Distance..mi.)
+median_distance <- median(run$distance_mi)
 
 ## for each run, identify whether run distance is above or below median distance
-run$long_binary <- ifelse(run$Distance..mi. > median_distance, "longer", "shorter")
+run$long_binary <- ifelse(run$distance_mi > median_distance, "longer", "shorter")
 
 ## count the number of times each word is used in long runs and in sort runs
 ## note that a word will only be counted once per post/note, even if it's used twice in that post/note
@@ -544,7 +659,9 @@ ggplot(length_level, aes(x = x , y = y)) +
   guides(alpha = FALSE) +
   xlab("") +
   ylab("") +
-  theme_bw()
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
 dev.off()
 
 ################################################
@@ -607,11 +724,11 @@ plotting_limit_x <- 1.1*max(c(abs(min(length_level$x)), abs(max(length_level$x))
 ## specify y plotting limits
 plotting_limit_y <- 1.1*max(c(abs(min(length_level$y)), abs(length_level$y))) 
 
-min_word_count <- 2
+min_word_count <- 3
 
 ## generate figure
 pdf("results/positioned_wordcloud_distance_pace.pdf", height = 5, width = 9)
-## only words that were used in at least two runs
+## only words that were used in at least X (where x = min_word_count) runs
 ggplot(length_level[which(length_level$total_count >= min_word_count),], 
        aes(x = x , y = y, alpha = alpha_updated)) + 
   geom_text(aes(size = total_count,
@@ -635,5 +752,22 @@ ggplot(length_level[which(length_level$total_count >= min_word_count),],
   ggtitle("Relaxing vs. Strugglefest:\nWord use After Different Distances and Paces of Runs") +
   xlab("") +
   ylab("") +
-  theme_bw()
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) ## center title of figure
+
 dev.off()
+
+################################################
+## number of topics ############################
+################################################
+
+## todo
+# result <- FindTopicsNumber(
+#   dtm,
+#   topics = seq(from = 2, to = 15, by = 1),
+#   metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+#   method = "Gibbs",
+#   control = list(seed = 77),
+#   mc.cores = 2L,
+#   verbose = TRUE
+# )

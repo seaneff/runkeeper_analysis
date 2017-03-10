@@ -67,10 +67,10 @@ dateBreaks <- function(x){
 
 ## name of subdirectory (must be in the data directory) containing GPX workout data
 ## and cardioActivities file
-directory_name <- "runkeeper-data-export-41471231-2017-02-20-0155"
+directory_name <- "runkeeper-data-export-41471231-2017-03-10-0005"
 
 ## time range is set manually in export, specify which one was used here
-time_range <- "3/1/2015 - 2/19/2017"
+time_range <- "3/1/2015 - 3/9/2017"
 
 race_dates <- c("2015-10-31", "2015-11-26", "2016-06-09", "2016-10-08",
                 "2016-11-24")
@@ -156,22 +156,45 @@ run <- merge(run, run_counts,
 ## reference: http://www.danielecook.com/how-to-plot-all-of-your-runkeeper-data/
 ## reference: https://gist.github.com/holgerbrandl/5595165
 
+## for me, 2016-10-08-0711.gpx (first half marathon) data are corrupted when exported from 
+## runkeeper, so I need to source those data from another location
+
 for (i in 1:nrow(run)) {
 
   gpx_file <- run$GPX.File[i]
-  print(paste("reading in", gpx_file, "(", i, "of", prettyNum(nrow(run), big.mark = ","), ")"))
   
-  if(gpx_file != ""){
+  ## "-ish" because not all runs have associated GPX files
+  print(paste("reading in ", gpx_file, " (", i, " of ", prettyNum(nrow(run)-1, big.mark = ","), "-ish)", sep = ""))
+  
+  if(gpx_file != "" & gpx_file != "2016-10-08-0711.gpx"){
   curr_route <- xmlParse(paste("data/", directory_name, "/", gpx_file, sep = ""), useInternalNodes = TRUE)
   route_df <- ldply(xpathSApply(curr_route, "//*[local-name()='trkpt']"), 
                     function(x) unlist(xmlToList(x)))
+  
+  ## todo: add heart rate, when heart rate exists 
+  route_df <- route_df[,c("ele", "time", ".attrs.lat", ".attrs.lon")]
   colnames(route_df) <- c("elevation", "datetime", "lat", "lon")
   trackdata <- data.frame(datetime = route_df$datetime, 
                           colwise(as.numeric, .(elevation, lat, lon))(route_df))
   trackdata$run_id <- i
   if(i == 1){ full_runs <- trackdata }
   if(i > 1) {full_runs <- rbind.data.frame(full_runs, trackdata)}
-  }
+  } 
+}
+
+## deal with special snowflake corrupted data from 2016 half marathon
+## if those data exist in a seperate location AND if they don't already exist in the 
+## dataframe "full_runs"
+if(file.exists("data/2016-10-08-0711.gpx" & !any(as.Date(full_runs$datetime) == "2016-10-08"))){
+  curr_route <- xmlParse("data/2016-10-08-0711.gpx", useInternalNodes = TRUE)
+  route_df <- ldply(xpathSApply(curr_route, "//*[local-name()='trkpt']"), 
+                  function(x) unlist(xmlToList(x)))
+  colnames(route_df) <- c("elevation", "datetime", "lat", "lon")
+  trackdata <- data.frame(datetime = route_df$datetime, 
+                        colwise(as.numeric, .(elevation, lat, lon))(route_df))
+  full_runs <- rbind.data.frame(full_runs,
+                                cbind.data.frame(trackdata, 
+                                                 run_id = max(full_runs$run_id)+1))
 }
 
 #####################################################################
@@ -232,7 +255,6 @@ dev.off()
 #####################################################################
 
 pdf("results/pace_vs_distance.pdf", height = 4, width = 6)
-
 ## general pace vs. distance
 par(mar = mar_default + c(2, 2, 0, 0))
 plot(run$distance_mi, run$avg_pace,
@@ -335,19 +357,30 @@ map_roadmap <- get_map(location = c(clusters[i,2], clusters[i,1]),
                 maptype = "roadmap", source = "google",
                 zoom = 11, color = "bw")
 
-
 ## plot map with tracks (roadmap)
-r <- ggmap(map_roadmap, extent = "device") +
+r <- ggmap(map_roadmap, extent = "device", darken = 0.8) +
   theme(axis.line = element_line(color = NA)) + 
   xlab("") + ylab("") 
 
-for( j in unique(full_runs$run_id)) {
-  r <- r + geom_path(data = full_runs[which(full_runs$run_id == j),], 
-                     col = "dark blue", size = 0.8, lineend = "round", alpha = 0.2,
-                     col = "bw")
-}
+## Warning messages like this correspond to lines outside of plot limits
+## (I'm not concerned about that, it's the behavior I want):
+## In min(x) : no non-missing arguments to min; returning Inf
 
-print(r)
+## set maximum number of expressions that will be allowed
+## so R doesn't think this is infinite recursion
+options(expressions = 10000)
+for(j in unique(full_runs$run_id)){ 
+  #print(j)
+  r <- r + geom_path(data = full_runs[which(full_runs$run_id == j),], 
+                       colour = unique(ifelse(
+                       format(as.Date(full_runs$datetime[which(full_runs$run_id == j)]), "%Y") == 2015, "#41b6c4",
+                       ifelse(format(as.Date(full_runs$datetime[which(full_runs$run_id == j)]), "%Y") == 2016, "#c7e9b4",
+                       ifelse(format(as.Date(full_runs$datetime[which(full_runs$run_id == j)]), "%Y") == 2017, "#ffffd9", 
+                       "#225ea8")))),
+                     size = 0.8, lineend = "round", alpha = 0.05) +
+    labs(colour = "") ## don't show legend title
+}
+suppressWarnings(print(r))
 
 }
 
@@ -477,7 +510,7 @@ best_performance <- performance[which(performance$median_rmse == min(performance
 ################################################################################
 
 pace_by_time_rf <- ranger(Average.Speed..mph. ~ distance_mi + morning_afternoon + 
-                            Climb..ft. + year + month + treadmill + race +
+                            climb_ft + year + month + treadmill + race +
                             run_count_past_7_days +
                             run_count_past_14_days +
                             run_count_past_30_days,
@@ -486,7 +519,7 @@ pace_by_time_rf <- ranger(Average.Speed..mph. ~ distance_mi + morning_afternoon 
                                        "Average.Speed..mph.",
                                        "distance_mi",
                                        "morning_afternoon",
-                                       "Climb..ft.",
+                                       "climb_ft",
                                        "year",
                                        "month",
                                        "treadmill",
@@ -501,7 +534,7 @@ pace_by_time_rf <- ranger(Average.Speed..mph. ~ distance_mi + morning_afternoon 
                           write.forest = TRUE)
 
 ## examine variable importance
-sort(importance(pace_by_time_rf))
+sort(importance(pace_by_time_rf), decreasing = TRUE)
 
 ##############################################################
 ## calculate residual for each random forest prediction ######
